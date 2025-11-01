@@ -11,6 +11,7 @@ kagglehub = {extras = ["pandas-datasets"], version = "*"}
 pandas = "*"
 scikit-learn = "*"
 tensorflow = "^2.20.0"
+requests = "*"
 
 [build-system]
 requires = ["poetry-core"]

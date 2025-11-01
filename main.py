@@ -1,11 +1,15 @@
 from f1_grand_prix_predictor import F1GrandPrixPredictor
 
 if __name__ == '__main__':
-    predictor = F1GrandPrixPredictor()
-    predictor.download_kaggle_data()
-    predictor.load_data()
-    predictor.preprocess()
-    predictor.train()
-    result_df = predictor.predict_from_csv("race_inputs.csv")
-    print(result_df)
+    p = F1GrandPrixPredictor()
+    p.download_kaggle_data()
+    p.load_data()
+    p.preprocess()
+    p.train()
 
+    # зібрати CSV для сезону/раунду (приклад: 2025, раунд 1)
+    p.build_inputs_csv_via_jolpica(season=2025, rnd=1, output_csv="race_inputs.csv")
+
+    # прогноз
+    res = p.predict_from_csv("race_inputs.csv")
+    print(res.head())
