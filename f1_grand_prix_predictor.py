@@ -5,7 +5,8 @@ from pathlib import Path
 import pandas as pd
 import tensorflow as tf
 import numpy as np
-from sklearn.metrics import classification_report, accuracy_score
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import classification_report, accuracy_score, mean_absolute_error
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from tensorflow.keras.layers import Dense, Input
@@ -180,6 +181,7 @@ class JolpicaClient:
 class F1GrandPrixPredictor:
     def __init__(self, data_dir=None, jolpica: JolpicaClient | None = None):
         self.model = None
+        self.position_model = None
         self.driver_encoder = LabelEncoder()
         self.constructor_encoder = LabelEncoder()
         self.race_encoder = LabelEncoder()
@@ -241,28 +243,44 @@ class F1GrandPrixPredictor:
         df = df.merge(self.constructors, on="constructorId")
         df = df.merge(self.circuits, on="circuitId")
 
-        df["target"] = (df["positionOrder"] == 1).astype(int)
+        df["finish_position"] = df["positionOrder"].astype(float)
+        df["target"] = (df["finish_position"] == 1).astype(int)
         df.sort_values(by=["driverId", "year", "round"], inplace=True)
         df["prev_points"] = df.groupby("driverId")["points"].transform(lambda s: s.cumsum() - s)
         win_ind = (df["positionOrder"] == 1).astype(int)
         df["prev_wins"] = win_ind.groupby(df["driverId"]).cumsum() - win_ind
 
         # use reference labels to remain consistent with Jolpica API identifiers
+        df["driverRef"] = df["driverRef"].fillna("unknown")
+        df["constructorRef"] = df["constructorRef"].fillna("unknown")
+        df["circuitRef"] = df["circuitRef"].fillna("unknown")
         df["driver_encoded"] = self.driver_encoder.fit_transform(df["driverRef"])
         df["constructor_encoded"] = self.constructor_encoder.fit_transform(df["constructorRef"])
         df["race_encoded"] = self.race_encoder.fit_transform(df["raceId"])
         df["circuit_encoded"] = self.circuit_encoder.fit_transform(df["circuitRef"])
 
-        df_model = df[self.features + ["race_encoded", "target"]].dropna()
+        df_model = df[self.features + ["target", "finish_position"]].dropna()
         X = df_model[self.features]
-        y = df_model[["race_encoded", "target"]]
+        y_win = df_model["target"].astype(int)
+        y_position = df_model["finish_position"].astype(float)
 
         X_scaled = self.scaler.fit_transform(X)
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
-            X_scaled, y, test_size=0.2, random_state=42
+        stratify = y_win if y_win.nunique() > 1 and y_win.value_counts().min() >= 2 else None
+        (
+            self.X_train,
+            self.X_test,
+            self.y_train_win,
+            self.y_test_win,
+            self.y_train_position,
+            self.y_test_position,
+        ) = train_test_split(
+            X_scaled,
+            y_win,
+            y_position,
+            test_size=0.2,
+            random_state=42,
+            stratify=stratify,
         )
-        self.X_train_raw = X.reset_index(drop=True)
-        self.y_train_raw = y.reset_index(drop=True)
 
     # ---------------------------- Model ----------------------------
     def build_model(self):
@@ -280,15 +298,26 @@ class F1GrandPrixPredictor:
         self.build_model()
         self.model.fit(
             self.X_train,
-            self.y_train["target"],
+            self.y_train_win,
             epochs=epochs,
             batch_size=batch_size,
             validation_split=0.2,
             verbose=1,
         )
         y_pred = (self.model.predict(self.X_test) > 0.5).astype("int32")
-        print("Accuracy:", accuracy_score(self.y_test["target"], y_pred))
-        print(classification_report(self.y_test["target"], y_pred))
+        print("Accuracy:", accuracy_score(self.y_test_win, y_pred))
+        print(classification_report(self.y_test_win, y_pred))
+
+        self.position_model = RandomForestRegressor(
+            n_estimators=300,
+            max_depth=None,
+            random_state=42,
+            n_jobs=-1,
+        )
+        self.position_model.fit(self.X_train, self.y_train_position)
+        pos_pred = self.position_model.predict(self.X_test)
+        mae = mean_absolute_error(self.y_test_position, pos_pred)
+        print(f"Position MAE: {mae:.2f}")
 
     # ---------------------------- Inference ----------------------------
     def _encode_with_new(self, encoder: LabelEncoder, series: pd.Series, kind: str) -> np.ndarray:
@@ -302,7 +331,8 @@ class F1GrandPrixPredictor:
         return encoder.transform(values)
 
     def predict_from_csv(self, csv_path, output_path: str = "prediction_results.csv"):
-        """CSV must contain columns: driverRef, constructorRef, grid, circuitRef, prev_points, prev_wins"""
+        """CSV must contain columns: driverRef, constructorRef, grid, circuitRef, prev_points, prev_wins.
+        Optional but recommended columns: season, round, raceName."""
         path = Path(csv_path)
         if not path.exists():
             raise FileNotFoundError(
@@ -356,6 +386,18 @@ class F1GrandPrixPredictor:
         softmax_probs = tf.nn.softmax(tf.convert_to_tensor(logits)).numpy()
         df["win_probability"] = softmax_probs
 
+        if self.position_model is None:
+            raise RuntimeError("Position model is not trained. Call train() before predict_from_csv().")
+        predicted_positions = self.position_model.predict(X_scaled)
+        df["predicted_position"] = predicted_positions
+        group_cols = [col for col in ["season", "round", "raceName"] if col in df.columns]
+        if group_cols:
+            df["predicted_rank"] = df.groupby(group_cols)["predicted_position"].rank(method="first")
+        else:
+            df["predicted_rank"] = df["predicted_position"].rank(method="first")
+        df["predicted_rank"] = df["predicted_rank"].astype(int)
+        df["predicted_top5"] = df["predicted_rank"] <= 5
+
         ordered_cols = []
         for col in ["season", "round", "raceName"]:
             if col in df.columns:
@@ -369,15 +411,31 @@ class F1GrandPrixPredictor:
         ordered_cols.append("circuitRef")
         if "circuitId" in df.columns:
             ordered_cols.append("circuitId")
-        ordered_cols.extend(["grid", "prev_points", "prev_wins", "win_probability"])
+        ordered_cols.extend(
+            ["grid", "prev_points", "prev_wins", "predicted_position", "predicted_rank", "predicted_top5", "win_probability"]
+        )
         # ensure all columns exist before selection
         available_cols = [col for col in ordered_cols if col in df.columns]
 
-        results = df[available_cols].sort_values(by="win_probability", ascending=False)
+        sort_cols = []
+        if group_cols:
+            sort_cols.extend(group_cols)
+        sort_cols.append("predicted_rank")
+        sort_cols.append("predicted_position")
+        results = df[available_cols].sort_values(by=sort_cols)
         results.to_csv(output_path, index=False)
-        top_rows = results.head(5)
-        print("[predict] Top 5 win probabilities:")
-        print(top_rows.to_string(index=False))
+        if group_cols:
+            for key, group in results.groupby(group_cols):
+                if not isinstance(key, tuple):
+                    key = (key,)
+                label = ", ".join(f"{col}={val}" for col, val in zip(group_cols, key))
+                top5 = group.nsmallest(5, "predicted_rank")
+                print(f"[predict][{label}] Top 5 predicted finishers:")
+                print(top5[["driverRef", "predicted_position", "win_probability"]].to_string(index=False))
+        else:
+            top5 = results.nsmallest(5, "predicted_rank")
+            print("[predict] Top 5 predicted finishers:")
+            print(top5[["driverRef", "predicted_position", "win_probability"]].to_string(index=False))
 
         return results
 

@@ -13,3 +13,4 @@ if __name__ == '__main__':
     # прогноз
     res = p.predict_from_csv("race_inputs.csv")
     print(res.head())
+    print("\nTip: run `python report_predictions.py --file prediction_results.csv --top 5` for a detailed summary.")
