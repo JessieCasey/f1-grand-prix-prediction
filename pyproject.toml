@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "formula1-winner-prediction"
+version = "0.1.0"
+description = "Utilities for exploring Kaggle Formula 1 championship datasets."
+authors = ["Your Name <you@example.com>"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.10,<4.0"
+kagglehub = {extras = ["pandas-datasets"], version = "*"}
+pandas = "*"
+scikit-learn = "*"
+tensorflow = "^2.20.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
