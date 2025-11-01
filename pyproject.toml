@@ -10,7 +10,6 @@ python = ">=3.10,<4.0"
 kagglehub = {extras = ["pandas-datasets"], version = "*"}
 pandas = "*"
 scikit-learn = "*"
-tensorflow = "^2.20.0"
 requests = "*"
 numpy = "*"
 
