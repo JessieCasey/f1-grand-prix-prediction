@@ -12,6 +12,7 @@ pandas = "*"
 scikit-learn = "*"
 tensorflow = "^2.20.0"
 requests = "*"
+numpy = "*"
 
 [build-system]
 requires = ["poetry-core"]

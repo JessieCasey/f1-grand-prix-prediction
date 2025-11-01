@@ -69,14 +69,16 @@ class JolpicaClient:
                 )
         return pd.DataFrame(rows)
 
-    def fetch_round_qualifying_entries(self, season: int, rnd: int) -> tuple[pd.DataFrame, str | None]:
-        """Return DataFrame with driverRef, constructorRef, grid from Quali; also circuitRef if present."""
+    def fetch_round_qualifying_entries(self, season: int, rnd: int) -> tuple[pd.DataFrame, str | None, str | None]:
+        """Return DataFrame with driverRef, constructorRef, grid from Quali along with circuit and race name."""
         mr = self._get(f"{season}/{rnd}/qualifying.json")
         races = mr.get("RaceTable", {}).get("Races", [])
         if not races:
-            return pd.DataFrame(), None
-        results = races[0].get("QualifyingResults", [])
-        circuit_ref = (races[0].get("Circuit") or {}).get("circuitId")
+            return pd.DataFrame(), None, None
+        race_info = races[0]
+        results = race_info.get("QualifyingResults", [])
+        circuit_ref = (race_info.get("Circuit") or {}).get("circuitId")
+        race_name = race_info.get("raceName")
         rows = []
         for res in results:
             drv = res.get("Driver", {})
@@ -86,9 +88,12 @@ class JolpicaClient:
                     "driverRef": drv.get("driverId"),
                     "constructorRef": cons.get("constructorId"),
                     "grid": int(res.get("position") or 0),
+                    "raceName": race_name,
+                    "season": season,
+                    "round": rnd,
                 }
             )
-        return pd.DataFrame(rows), circuit_ref
+        return pd.DataFrame(rows), circuit_ref, race_name
 
     def build_inputs_for_round(
         self,
@@ -115,13 +120,22 @@ class JolpicaClient:
         )
 
         # entries for target round
-        entries = df_season[df_season["round"] == rnd][["driverRef", "constructorRef", "circuitRef", "grid"]].drop_duplicates()
+        entries = (
+            df_season[df_season["round"] == rnd][
+                ["driverRef", "constructorRef", "circuitRef", "grid", "season", "round", "raceName"]
+            ]
+            .drop_duplicates(subset=["driverRef", "constructorRef"])
+            .copy()
+        )
         if entries.empty:
-            quali_df, circuit_ref = self.fetch_round_qualifying_entries(season, rnd)
+            quali_df, circuit_ref, race_name = self.fetch_round_qualifying_entries(season, rnd)
             if quali_df.empty:
                 raise RuntimeError(f"Could not find entries for season {season} round {rnd}")
             entries = quali_df
             entries["circuitRef"] = circuit_ref
+            entries["raceName"] = race_name or ""
+            entries["season"] = season
+            entries["round"] = rnd
 
         # attach prev features
         entries["prev_points"] = entries["driverRef"].map(prev_points).fillna(0.0)
@@ -141,6 +155,9 @@ class JolpicaClient:
 
         final_df = entries[
             [
+                "season",
+                "round",
+                "raceName",
                 "driverRef",
                 "constructorRef",
                 "circuitRef",
@@ -152,6 +169,11 @@ class JolpicaClient:
                 "prev_wins",
             ]
         ].copy()
+        race_label = final_df["raceName"].iloc[0] if not final_df.empty else "unknown"
+        print(
+            f"[jolpica] Prepared {len(final_df)} entries for season {season} round {rnd} "
+            f"({race_label}) with {final_df['constructorRef'].nunique()} teams."
+        )
         return final_df
 
 
@@ -309,6 +331,18 @@ class F1GrandPrixPredictor:
                 "Regenerate inputs with build_inputs_csv_via_jolpica."
             )
 
+        if "raceName" in df.columns:
+            race_names = df["raceName"].unique().tolist()
+        else:
+            race_names = []
+        if race_names:
+            label = ", ".join(f"{idx}: {name}" for idx, name in enumerate(race_names))
+            print(f"[predict] Race names in input -> {label}")
+            detailed = " ".join(f"({idx}, '{name}')" for idx, name in enumerate(df["raceName"].tolist()))
+            print(f"[predict] raceName rows: {detailed}")
+        else:
+            print("[predict] No raceName column in input; predictions will omit race metadata.")
+
         # Encode & scale (extend encoders with unseen Jolpica entries)
         df["driver_encoded"] = self._encode_with_new(self.driver_encoder, df["driverRef"], "driver")
         df["constructor_encoded"] = self._encode_with_new(self.constructor_encoder, df["constructorRef"], "constructor")
@@ -322,12 +356,29 @@ class F1GrandPrixPredictor:
         softmax_probs = tf.nn.softmax(tf.convert_to_tensor(logits)).numpy()
         df["win_probability"] = softmax_probs
 
-        ordered_cols = ["driverRef"]
+        ordered_cols = []
+        for col in ["season", "round", "raceName"]:
+            if col in df.columns:
+                ordered_cols.append(col)
+        ordered_cols.append("driverRef")
         if "driverId" in df.columns:
             ordered_cols.append("driverId")
-        ordered_cols.append("win_probability")
-        results = df[ordered_cols].sort_values(by="win_probability", ascending=False)
+        ordered_cols.append("constructorRef")
+        if "constructorId" in df.columns:
+            ordered_cols.append("constructorId")
+        ordered_cols.append("circuitRef")
+        if "circuitId" in df.columns:
+            ordered_cols.append("circuitId")
+        ordered_cols.extend(["grid", "prev_points", "prev_wins", "win_probability"])
+        # ensure all columns exist before selection
+        available_cols = [col for col in ordered_cols if col in df.columns]
+
+        results = df[available_cols].sort_values(by="win_probability", ascending=False)
         results.to_csv(output_path, index=False)
+        top_rows = results.head(5)
+        print("[predict] Top 5 win probabilities:")
+        print(top_rows.to_string(index=False))
+
         return results
 
     # ---------------------------- Jolpica helpers (composition) ----------------------------
@@ -341,6 +392,10 @@ class F1GrandPrixPredictor:
             kaggle_circuits=self.circuits,
         )
         final_df.to_csv(output_csv, index=False)
+        print(
+            f"[jolpica] Saved race inputs for season {season} round {rnd} "
+            f"({final_df['raceName'].iloc[0] if not final_df.empty else 'unknown'}) -> {output_csv}"
+        )
         return final_df
 
 

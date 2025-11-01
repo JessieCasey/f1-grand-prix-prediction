@@ -1,21 +1,21 @@
-driverRef,driverId,win_probability
-norris,846.0,0.052905712
-max_verstappen,830.0,0.05279769
-piastri,857.0,0.05214883
-russell,847.0,0.05103316
-tsunoda,852.0,0.05043442
-albon,848.0,0.050128315
-leclerc,844.0,0.05009614
-hamilton,1.0,0.049798936
-gasly,842.0,0.049475137
-sainz,832.0,0.049306005
-stroll,840.0,0.049297497
-hadjar,,0.049278315
-alonso,4.0,0.04919779
-doohan,862.0,0.04918545
-bortoleto,,0.049160607
-antonelli,,0.049155474
-hulkenberg,807.0,0.04915459
-lawson,859.0,0.049151186
-ocon,839.0,0.049150404
-bearman,860.0,0.0491443
+season,round,raceName,driverRef,driverId,constructorRef,constructorId,circuitRef,circuitId,grid,prev_points,prev_wins,win_probability
+2025,2,Chinese Grand Prix,norris,846.0,mclaren,1,shanghai,17,3,25.0,1,0.052727606
+2025,2,Chinese Grand Prix,russell,847.0,mercedes,131,shanghai,17,2,15.0,0,0.052157823
+2025,2,Chinese Grand Prix,piastri,857.0,mclaren,1,shanghai,17,1,2.0,0,0.05210342
+2025,2,Chinese Grand Prix,hamilton,1.0,ferrari,6,shanghai,17,5,1.0,0,0.05062461
+2025,2,Chinese Grand Prix,max_verstappen,830.0,red_bull,9,shanghai,17,4,18.0,0,0.05034288
+2025,2,Chinese Grand Prix,leclerc,844.0,ferrari,6,shanghai,17,6,4.0,0,0.050135996
+2025,2,Chinese Grand Prix,hadjar,,rb,215,shanghai,17,7,0.0,0,0.049736753
+2025,2,Chinese Grand Prix,antonelli,,mercedes,131,shanghai,17,8,12.0,0,0.049599275
+2025,2,Chinese Grand Prix,tsunoda,852.0,rb,215,shanghai,17,9,0.0,0,0.049574766
+2025,2,Chinese Grand Prix,albon,848.0,williams,3,shanghai,17,10,10.0,0,0.049469206
+2025,2,Chinese Grand Prix,ocon,839.0,haas,210,shanghai,17,11,0.0,0,0.049438424
+2025,2,Chinese Grand Prix,hulkenberg,807.0,sauber,15,shanghai,17,12,6.0,0,0.04940225
+2025,2,Chinese Grand Prix,alonso,4.0,aston_martin,117,shanghai,17,13,0.0,0,0.04935644
+2025,2,Chinese Grand Prix,sainz,832.0,williams,3,shanghai,17,15,0.0,0,0.049349982
+2025,2,Chinese Grand Prix,stroll,840.0,aston_martin,117,shanghai,17,14,8.0,0,0.049343098
+2025,2,Chinese Grand Prix,gasly,842.0,alpine,214,shanghai,17,16,0.0,0,0.049335044
+2025,2,Chinese Grand Prix,bearman,860.0,haas,210,shanghai,17,17,0.0,0,0.0493294
+2025,2,Chinese Grand Prix,doohan,862.0,alpine,214,shanghai,17,18,0.0,0,0.04932567
+2025,2,Chinese Grand Prix,bortoleto,,sauber,15,shanghai,17,19,0.0,0,0.04932502
+2025,2,Chinese Grand Prix,lawson,859.0,red_bull,9,shanghai,17,20,0.0,0,0.049322307

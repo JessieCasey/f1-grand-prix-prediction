@@ -8,7 +8,7 @@ if __name__ == '__main__':
     p.train()
 
     # зібрати CSV для сезону/раунду (приклад: 2025, раунд 1)
-    p.build_inputs_csv_via_jolpica(season=2025, rnd=1, output_csv="race_inputs.csv")
+    p.build_inputs_csv_via_jolpica(season=2025, rnd=2, output_csv="race_inputs.csv")
 
     # прогноз
     res = p.predict_from_csv("race_inputs.csv")
