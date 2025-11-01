@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Utilities for exploring Kaggle Formula 1 championship datasets."
 authors = ["Your Name <you@example.com>"]
 package-mode = false
+packages = [
+    { include = "f1_prediction", from = "src" }
+]
 
 [tool.poetry.dependencies]
 python = ">=3.10,<4.0"

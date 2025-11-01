@@ -20,7 +20,6 @@ DEFAULT_FEATURE_COLUMNS = [
     "constructor_prev_wins",
     "year",
     "round",
-    "driver_age",
 ]
 
 PREDICTION_INPUT_COLUMNS = {
@@ -36,7 +35,6 @@ PREDICTION_INPUT_COLUMNS = {
     "constructor_prev_wins",
     "year",
     "round",
-    "driver_age",
 }
 
 
@@ -50,6 +48,7 @@ class TrainingData:
 
 
 class FeatureEngineer:
+    """Handle feature engineering, encoding, and scaling for race prediction."""
 
     def __init__(self, feature_columns: Sequence[str] | None = None) -> None:
         self.feature_columns = list(feature_columns or DEFAULT_FEATURE_COLUMNS)
@@ -106,14 +105,6 @@ class FeatureEngineer:
         avg_zero_mask = encoded["driver_prev_avg_finish"] <= 0
         encoded.loc[avg_zero_mask, "driver_prev_avg_finish"] = encoded.loc[avg_zero_mask, "grid"].clip(lower=1)
 
-        if encoded["driver_age"].eq(0).all():
-            encoded["driver_age"] = 30.0
-        else:
-            median_age = encoded.loc[encoded["driver_age"] > 0, "driver_age"].median()
-            encoded.loc[encoded["driver_age"] == 0, "driver_age"] = (
-                median_age if not np.isnan(median_age) else 30.0
-            )
-
         X = encoded[self.feature_columns].to_numpy()
         X_scaled = self.scaler.transform(X)
         return encoded, X_scaled
@@ -135,9 +126,6 @@ class FeatureEngineer:
         return df
 
     def _engineer_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df["dob"] = pd.to_datetime(df["dob"], errors="coerce")
-
         df.sort_values(by=["driverId", "year", "round"], inplace=True)
         df["finish_position"] = df["positionOrder"].astype(float)
         df["target"] = (df["finish_position"] == 1).astype(int)
@@ -157,9 +145,6 @@ class FeatureEngineer:
 
         df["constructor_prev_points"] = df.groupby("constructorId")["points"].cumsum() - df["points"]
         df["constructor_prev_wins"] = win_flag.groupby(df["constructorId"]).cumsum() - win_flag
-
-        df["driver_age"] = (df["date"] - df["dob"]).dt.days / 365.25
-        df["driver_age"] = df["driver_age"].fillna(df["driver_age"].median())
 
         df["year"] = df["year"].astype(int)
         df["round"] = df["round"].astype(int)
@@ -184,7 +169,6 @@ class FeatureEngineer:
             "driver_prev_avg_finish",
             "constructor_prev_points",
             "constructor_prev_wins",
-            "driver_age",
         ]
         df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
         avg_zero_mask = df["driver_prev_avg_finish"] <= 0

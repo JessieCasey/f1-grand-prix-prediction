@@ -18,18 +18,21 @@ from .feature_engineering import (
 )
 from .jolpica import JolpicaClient
 
+DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "historical"
+DEFAULT_RESULTS_DIR = DEFAULT_DATA_DIR.parent / "results"
+DEFAULT_PREDICTION_PATH = DEFAULT_RESULTS_DIR / "prediction_results.csv"
+
 
 class F1GrandPrixPredictor:
     def __init__(
         self,
-        data_dir: str | Path | None = None,
-        jolpica: JolpicaClient | None = None,
-        feature_engineer: FeatureEngineer | None = None,
+        jolpica: JolpicaClient,
+        feature_engineer: FeatureEngineer,
     ) -> None:
-        self.feature_engineer = feature_engineer or FeatureEngineer()
-        self.jolpica = jolpica or JolpicaClient()
+        self.feature_engineer = feature_engineer
+        self.jolpica = jolpica
 
-        self.data_dir = Path(data_dir) if data_dir else Path(__file__).resolve().parent / "data" / "historical"
+        self.data_dir = DEFAULT_DATA_DIR
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
         self.global_win_model: LogisticRegression | None = None
@@ -197,7 +200,11 @@ class F1GrandPrixPredictor:
             f"positions={len(self.position_models)}"
         )
 
-    def predict_from_csv(self, csv_path: str | Path, output_path: str = "prediction_results.csv") -> pd.DataFrame:
+    def predict_from_csv(
+        self,
+        csv_path: str | Path,
+        output_path: str | Path = DEFAULT_PREDICTION_PATH,
+    ) -> pd.DataFrame:
         if self.global_win_model is None or self.global_position_model is None:
             raise RuntimeError("Models are not trained. Call train() first.")
 
@@ -219,9 +226,6 @@ class F1GrandPrixPredictor:
             )
         if "raceName" not in df.columns:
             raise ValueError("Prediction CSV must contain 'raceName' to select race-specific models.")
-
-        race_summary = " ".join(f"({idx}, '{name}')" for idx, name in enumerate(df['raceName'].tolist()))
-        print(f"[predict] raceName rows: {race_summary}")
 
         encoded_df, X_scaled = self.feature_engineer.transform_prediction_inputs(df)
 
@@ -264,7 +268,9 @@ class F1GrandPrixPredictor:
             else:
                 encoded_df.loc[idx, "win_probability"] = 1.0 / len(idx)
 
-        encoded_df["predicted_rank"] = encoded_df.groupby("raceName")["predicted_position"].rank(method="first").astype(int)
+        encoded_df["predicted_rank"] = encoded_df.groupby("raceName")["predicted_position"].rank(method="first").astype(
+            int
+        )
         encoded_df["predicted_top5"] = encoded_df["predicted_rank"] <= 5
 
         ordered_cols = [
@@ -285,7 +291,6 @@ class F1GrandPrixPredictor:
             "driver_prev_avg_finish",
             "constructor_prev_points",
             "constructor_prev_wins",
-            "driver_age",
             "predicted_position",
             "predicted_rank",
             "predicted_top5",
@@ -295,6 +300,8 @@ class F1GrandPrixPredictor:
         available_cols = [col for col in ordered_cols if col in encoded_df.columns]
 
         results = encoded_df[available_cols].sort_values(["raceName", "predicted_rank", "predicted_position"])
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         results.to_csv(output_path, index=False)
 
         for race_name, group in results.groupby("raceName"):
@@ -304,7 +311,6 @@ class F1GrandPrixPredictor:
 
         return results
 
-    # ---------------------------- Jolpica helper ----------------------------
     def build_inputs_csv_via_jolpica(self, season: int, rnd: int, output_csv: str) -> pd.DataFrame:
         try:
             final_df = self.jolpica.build_inputs_for_round(
@@ -348,12 +354,6 @@ class F1GrandPrixPredictor:
         *,
         output_csv: str | None = None,
     ) -> pd.DataFrame:
-        """
-        Build a candidate grid for the next upcoming race in the given season.
-
-        If ``season`` is omitted, the latest season present in the Kaggle calendar is used.
-        Optionally writes the result to ``output_csv``.
-        """
         if season is None:
             if not hasattr(self, "races"):
                 raise RuntimeError("Call load_data() before invoking get_next_race_candidates().")
@@ -361,15 +361,16 @@ class F1GrandPrixPredictor:
 
         candidates = self.jolpica.get_next_race_candidates(
             season,
-            kaggle_drivers=getattr(self, "drivers", None),
-            kaggle_constructors=getattr(self, "constructors", None),
-            kaggle_races=getattr(self, "races", None),
-            kaggle_circuits=getattr(self, "circuits", None),
+            kaggle_drivers=self.drivers,
+            kaggle_constructors=self.constructors,
+            kaggle_races=self.races,
+            kaggle_circuits=self.circuits,
         )
 
         if output_csv is not None:
-            Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
-            candidates.to_csv(output_csv, index=False)
+            output_path = Path(output_csv)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            candidates.to_csv(output_path, index=False)
             race_label = candidates["raceName"].iloc[0] if not candidates.empty else "unknown"
             print(f"[jolpica] Saved next-race candidates for season {season} ({race_label}) -> {output_csv}")
 
