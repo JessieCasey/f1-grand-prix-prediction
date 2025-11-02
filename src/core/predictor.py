@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report, mean_absolute_error
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, mean_absolute_error, roc_auc_score
+from sklearn.model_selection import KFold, RandomizedSearchCV, StratifiedKFold, train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 
 from .feature_engineering import (
@@ -21,6 +21,56 @@ from .jolpica import JolpicaClient
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "historical"
 DEFAULT_RESULTS_DIR = DEFAULT_DATA_DIR.parent / "results"
 DEFAULT_PREDICTION_PATH = DEFAULT_RESULTS_DIR / "prediction_results.csv"
+
+DEFAULT_GLOBAL_WIN_PARAMS = {
+    "learning_rate": 0.05,
+    "max_iter": 400,
+    "max_leaf_nodes": 31,
+    "max_depth": None,
+    "l2_regularization": 1e-2,
+    "early_stopping": True,
+}
+
+DEFAULT_GLOBAL_POSITION_PARAMS = {
+    "learning_rate": 0.05,
+    "max_iter": 400,
+    "max_leaf_nodes": 63,
+    "max_depth": None,
+    "l2_regularization": 1e-2,
+    "early_stopping": True,
+}
+
+DEFAULT_RACE_WIN_PARAMS = {
+    "max_iter": 1000,
+    "class_weight": "balanced",
+    "solver": "lbfgs",
+}
+
+DEFAULT_RACE_POSITION_PARAMS = {
+    "n_estimators": 300,
+    "random_state": 42,
+    "n_jobs": -1,
+}
+
+GLOBAL_WIN_PARAM_DISTRIBUTIONS = {
+    "learning_rate": [0.01, 0.02, 0.03, 0.05, 0.08, 0.1],
+    "max_iter": [200, 300, 400, 500, 600, 800],
+    "max_leaf_nodes": [15, 31, 63, 95, 127],
+    "max_depth": [3, 5, 7, None],
+    "min_samples_leaf": [10, 20, 30, 40],
+    "l2_regularization": [1e-3, 5e-3, 1e-2, 5e-2, 1e-1],
+    "early_stopping": [True, False],
+}
+
+GLOBAL_POSITION_PARAM_DISTRIBUTIONS = {
+    "learning_rate": [0.03, 0.05, 0.08, 0.1],
+    "max_iter": [300, 400, 500, 650, 800],
+    "max_leaf_nodes": [31, 63, 95, 127, 191],
+    "max_depth": [5, 7, 9, None],
+    "min_samples_leaf": [5, 10, 20, 35],
+    "l2_regularization": [1e-3, 5e-3, 1e-2, 5e-2, 1e-1],
+    "early_stopping": [True, False],
+}
 
 
 class F1GrandPrixPredictor:
@@ -89,6 +139,20 @@ class F1GrandPrixPredictor:
         self.constructors = pd.read_csv(self.data_dir / "constructors.csv").drop(columns=["url"], errors="ignore")
         self.circuits = pd.read_csv(self.data_dir / "circuits.csv").drop(columns=["url"], errors="ignore")
 
+    def verify_jolpica_availability(self, season: int, rnd: int | None = None, *, fail_fast: bool = False) -> bool:
+        try:
+            self.jolpica.verify_availability(season, rnd)
+            print(f"[jolpica] Connectivity check succeeded for season {season}{f' round {rnd}' if rnd else ''}.")
+            return True
+        except RuntimeError as exc:
+            print(
+                f"[jolpica] Warning: unable to reach API for season {season}"
+                f"{f' round {rnd}' if rnd else ''}: {exc}"
+            )
+            if fail_fast:
+                raise
+            return False
+
     def preprocess(self) -> None:
         training_data = self.feature_engineer.build_training_data(
             self.results,
@@ -121,7 +185,20 @@ class F1GrandPrixPredictor:
             stratify=stratify,
         )
 
-    def train(self, max_iter: int = 1000) -> None:
+    def train(
+        self,
+        max_iter: int = 1000,
+        *,
+        global_win_params: Dict[str, Any] | None = None,
+        global_position_params: Dict[str, Any] | None = None,
+        race_win_params: Dict[str, Any] | None = None,
+        race_position_params: Dict[str, Any] | None = None,
+        tune_global: bool = False,
+        tuning_iter: int = 20,
+        cv_folds: int = 3,
+        race_min_samples: int = 30,
+        random_state: int = 42,
+    ) -> None:
         if any(
             attr is None
             for attr in (
@@ -137,40 +214,130 @@ class F1GrandPrixPredictor:
             raise RuntimeError("Call preprocess() before train().")
 
         classes = np.array([0, 1])
-        class_weights = compute_class_weight(class_weight="balanced", classes=classes, y=self.y_train_win)
+        class_weights = compute_class_weight(class_weight="balanced", classes=classes, y=self.y_train_win)  # type: ignore[arg-type]
         sample_weight = np.where(self.y_train_win == 0, class_weights[0], class_weights[1])
 
-        self.global_win_model = HistGradientBoostingClassifier(
-            learning_rate=0.05,
-            max_iter=400,
-            max_leaf_nodes=31,
-            max_depth=None,
-            l2_regularization=1e-2,
-            early_stopping=True,
-            random_state=42,
-        )
+        win_params = DEFAULT_GLOBAL_WIN_PARAMS.copy()
+        win_params.setdefault("random_state", random_state)
+        if global_win_params:
+            win_params.update(global_win_params)
+
+        self.global_win_model = HistGradientBoostingClassifier(**win_params)
+
+        if tune_global:
+            cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+            self.global_win_model = self._random_search_hist_gradient(
+                model=self.global_win_model,
+                param_distributions=GLOBAL_WIN_PARAM_DISTRIBUTIONS,
+                X=self.X_train,
+                y=self.y_train_win,
+                scoring="roc_auc",
+                cv=cv,
+                n_iter=tuning_iter,
+                model_name="global_win",
+                random_state=random_state,
+                sample_weight=sample_weight,
+            )
+
         self.global_win_model.fit(self.X_train, self.y_train_win, sample_weight=sample_weight)
+        train_win_probs = self.global_win_model.predict_proba(self.X_train)[:, 1]
+        train_win_pred = (train_win_probs >= 0.5).astype(int)
+        print(f"Global win train accuracy: {accuracy_score(self.y_train_win, train_win_pred):.3f}")
+        try:
+            train_auc = roc_auc_score(self.y_train_win, train_win_probs)
+            print(f"Global win train ROC-AUC: {train_auc:.3f}")
+        except ValueError:
+            pass
+
         win_probs = self.global_win_model.predict_proba(self.X_test)[:, 1]
         win_pred = (win_probs >= 0.5).astype(int)
         print("Global win accuracy:", accuracy_score(self.y_test_win, win_pred))
+        try:
+            test_auc = roc_auc_score(self.y_test_win, win_probs)
+            print(f"Global win ROC-AUC: {test_auc:.3f}")
+        except ValueError:
+            pass
         print(classification_report(self.y_test_win, win_pred))
 
-        self.global_position_model = HistGradientBoostingRegressor(
-            learning_rate=0.05,
-            max_iter=400,
-            max_leaf_nodes=63,
-            max_depth=None,
-            l2_regularization=1e-2,
-            early_stopping=True,
-            random_state=42,
-        )
+        pos_params = DEFAULT_GLOBAL_POSITION_PARAMS.copy()
+        pos_params.setdefault("random_state", random_state)
+        if global_position_params:
+            pos_params.update(global_position_params)
+
+        self.global_position_model = HistGradientBoostingRegressor(**pos_params)
+
+        if tune_global:
+            cv_reg = KFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+            self.global_position_model = self._random_search_hist_gradient(
+                model=self.global_position_model,
+                param_distributions=GLOBAL_POSITION_PARAM_DISTRIBUTIONS,
+                X=self.X_train,
+                y=self.y_train_position,
+                scoring="neg_mean_absolute_error",
+                cv=cv_reg,
+                n_iter=tuning_iter,
+                model_name="global_position",
+                random_state=random_state,
+            )
+
         self.global_position_model.fit(self.X_train, self.y_train_position)
         pos_pred = self.global_position_model.predict(self.X_test)
         print(f"Global position MAE: {mean_absolute_error(self.y_test_position, pos_pred):.2f}")
 
-        self._train_race_specific_models(max_iter)
+        race_win_kwargs = DEFAULT_RACE_WIN_PARAMS.copy()
+        race_win_kwargs["max_iter"] = max_iter
+        if race_win_params:
+            race_win_kwargs.update(race_win_params)
 
-    def _train_race_specific_models(self, max_iter: int) -> None:
+        race_pos_kwargs = DEFAULT_RACE_POSITION_PARAMS.copy()
+        if race_position_params:
+            race_pos_kwargs.update(race_position_params)
+
+        self._train_race_specific_models(
+            race_win_kwargs,
+            race_pos_kwargs,
+            min_samples=race_min_samples,
+        )
+
+    def _random_search_hist_gradient(
+        self,
+        *,
+        model: HistGradientBoostingClassifier | HistGradientBoostingRegressor,
+        param_distributions: Mapping[str, Sequence[Any]],
+        X: np.ndarray,
+        y: np.ndarray,
+        scoring: str,
+        cv,
+        n_iter: int,
+        model_name: str,
+        random_state: int,
+        sample_weight: np.ndarray | None = None,
+    ) -> HistGradientBoostingClassifier | HistGradientBoostingRegressor:
+        search = RandomizedSearchCV(
+            estimator=model,
+            param_distributions=param_distributions,
+            n_iter=n_iter,
+            scoring=scoring,
+            cv=cv,
+            random_state=random_state,
+            n_jobs=-1,
+            verbose=1,
+            refit=True,
+        )
+        fit_kwargs = {}
+        if sample_weight is not None:
+            fit_kwargs["sample_weight"] = sample_weight
+        search.fit(X, y, **fit_kwargs)
+        print(f"[tune][{model_name}] best_score={search.best_score_:.4f} params={search.best_params_}")
+        return search.best_estimator_
+
+    def _train_race_specific_models(
+        self,
+        win_params: Mapping[str, Any],
+        position_params: Mapping[str, Any],
+        *,
+        min_samples: int,
+    ) -> None:
         assert self.training_data is not None
         frame = self.training_data.frame
         X_full = self.training_data.X_scaled
@@ -178,7 +345,6 @@ class F1GrandPrixPredictor:
         self.win_models.clear()
         self.position_models.clear()
 
-        min_samples = 30
         for race_name, subset in frame.groupby("raceName"):
             idx = subset.index.to_numpy()
             X_race = X_full[idx]
@@ -186,12 +352,12 @@ class F1GrandPrixPredictor:
             y_pos_race = subset["finish_position"].to_numpy()
 
             if len(y_win_race) >= min_samples and np.unique(y_win_race).size > 1:
-                win_model = LogisticRegression(max_iter=max_iter, class_weight="balanced")
+                win_model = LogisticRegression(**dict(win_params))
                 win_model.fit(X_race, y_win_race)
                 self.win_models[race_name] = win_model
 
             if len(y_pos_race) >= min_samples:
-                pos_model = RandomForestRegressor(n_estimators=300, random_state=42, n_jobs=-1)
+                pos_model = RandomForestRegressor(**dict(position_params))
                 pos_model.fit(X_race, y_pos_race)
                 self.position_models[race_name] = pos_model
 

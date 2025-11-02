@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable
 
 import pandas as pd
 
@@ -47,23 +47,11 @@ def summarize_predictions(
     frame: pd.DataFrame,
     *,
     top_n: int = 5,
-    race_filter: Optional[str] = None,
-    include_probabilities: bool = True,
-    include_constructor: bool = True,
 ) -> str:
     df = frame.copy()
-    if race_filter:
-        mask = df["raceName"].str.contains(race_filter, case=False, na=False)
-        if not mask.any():
-            return f"No races matched filter '{race_filter}'."
-        df = df[mask]
 
     races: list[str] = []
-    show_cols = DEFAULT_DISPLAY_COLUMNS.copy()
-    if not include_probabilities and "win_probability" in show_cols:
-        show_cols.remove("win_probability")
-    if not include_constructor and "constructorRef" in show_cols:
-        show_cols.remove("constructorRef")
+    show_cols = DEFAULT_DISPLAY_COLUMNS
 
     group_keys = ["season", "round", "raceName"]
     for (season, rnd, name), group in df.groupby(group_keys, sort=True):
@@ -71,8 +59,11 @@ def summarize_predictions(
         available_cols = [col for col in show_cols if col in subset.columns]
         if not available_cols:
             continue
+        formatted_subset = subset[available_cols].copy()
+        if "predicted_position" in formatted_subset.columns:
+            formatted_subset["predicted_position"] = formatted_subset["predicted_position"].round(2)
         header = f"{season} Round {rnd}: {name}"
-        races.append(_format_table(header, subset[available_cols]))
+        races.append(_format_table(header, formatted_subset))
 
     if not races:
         return "No prediction rows available."
@@ -101,26 +92,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=f"Path to prediction CSV (default: {DEFAULT_RESULTS_PATH}).",
     )
     parser.add_argument("--top", type=int, default=5, help="How many rows per race to display (default: 5).")
-    parser.add_argument(
-        "--race",
-        dest="race_filter",
-        default="",
-        help="Filter races by substring (case-insensitive). Example: --race 'Australian'.",
-    )
-    parser.add_argument(
-        "--no-probabilities",
-        action="store_true",
-        help="Hide win probabilities from the summary table.",
-    )
-    parser.add_argument(
-        "--no-constructors",
-        action="store_true",
-        help="Hide constructor names from the summary table.",
-    )
     return parser
 
 
-def main(argv: Optional[Iterable[str]] = None) -> int:
+def main(argv: Iterable[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
@@ -133,9 +108,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     summary = summarize_predictions(
         frame,
         top_n=args.top,
-        race_filter=args.race_filter or None,
-        include_probabilities=not args.no_probabilities,
-        include_constructor=not args.no_constructors,
     )
     print(summary)
     return 0

@@ -100,6 +100,14 @@ class JolpicaClient:
                 )
         return pd.DataFrame(rows)
 
+    def verify_availability(self, season: int, rnd: Optional[int] = None) -> None:
+        try:
+            self._fetch_calendar(season)
+            if rnd is not None:
+                self.fetch_round_qualifying_entries(season, rnd)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"Failed to reach Jolpica API: {exc}") from exc
+
     def fetch_round_qualifying_entries(self, season: int, rnd: int) -> tuple[
         pd.DataFrame, Optional[str], Optional[str]]:
         payload = self._request(f"{season}/{rnd}/qualifying.json")

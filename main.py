@@ -27,6 +27,7 @@ def main() -> None:
     predictor.download_kaggle_data()
     predictor.load_data()
     predictor.preprocess()
+    predictor.verify_jolpica_availability(args.season, args.round)
     predictor.train()
 
     race_inputs_path = RESULTS_DIR / "race_inputs.csv"
