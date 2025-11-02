@@ -12,8 +12,8 @@ from sklearn.model_selection import KFold, RandomizedSearchCV, StratifiedKFold, 
 from sklearn.utils.class_weight import compute_class_weight
 
 from .feature_engineering import (
-    FeatureEngineer,
     PREDICTION_INPUT_COLUMNS,
+    FeatureEngineer,
     TrainingData,
 )
 from .jolpica import JolpicaClient
@@ -425,7 +425,7 @@ class F1GrandPrixPredictor:
         encoded_df["predicted_position"] = predicted_positions
 
         encoded_df["win_probability"] = 0.0
-        for race_name, group in encoded_df.groupby("raceName"):
+        for _, group in encoded_df.groupby("raceName"):
             idx = group.index.to_numpy()
             probs = raw_win_prob[idx]
             total = probs.sum()

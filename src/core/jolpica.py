@@ -311,13 +311,31 @@ class JolpicaClient:
             kaggle_circuits: Optional[pd.DataFrame],
     ) -> pd.DataFrame:
         result = entries.copy()
-        driver_map = dict(zip(kaggle_drivers["driverRef"], kaggle_drivers["driverId"]))
-        constructor_map = dict(zip(kaggle_constructors["constructorRef"], kaggle_constructors["constructorId"]))
+        driver_map = dict(
+            zip(
+                kaggle_drivers["driverRef"],
+                kaggle_drivers["driverId"],
+                strict=False,
+            )
+        )
+        constructor_map = dict(
+            zip(
+                kaggle_constructors["constructorRef"],
+                kaggle_constructors["constructorId"],
+                strict=False,
+            )
+        )
         result["driverId"] = result["driverRef"].map(driver_map)
         result["constructorId"] = result["constructorRef"].map(constructor_map)
 
         if kaggle_circuits is not None and not kaggle_circuits.empty:
-            circuit_map = dict(zip(kaggle_circuits["circuitRef"], kaggle_circuits["circuitId"]))
+            circuit_map = dict(
+                zip(
+                    kaggle_circuits["circuitRef"],
+                    kaggle_circuits["circuitId"],
+                    strict=False,
+                )
+            )
             result["circuitId"] = result["circuitRef"].map(circuit_map)
         else:
             result["circuitId"] = None
