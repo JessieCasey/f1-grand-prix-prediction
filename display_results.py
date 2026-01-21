@@ -22,9 +22,7 @@ REQUIRED_COLUMNS = {
 DEFAULT_DISPLAY_COLUMNS = [
     "driverRef",
     "predicted_rank",
-    "predicted_position",
     "win_probability",
-    "grid",
     "constructorRef",
 ]
 

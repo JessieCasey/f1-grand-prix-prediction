@@ -19,8 +19,8 @@ Training uses engineered features derived from historical results:
 
 - Driver/team identifiers (`driver_encoded`, `constructor_encoded`, `circuit_encoded`)
 - Starting position on the grid (`grid`)
-- Rolling driver stats: cumulative points, wins, podiums, average finish
-- Rolling constructor stats: cumulative points, wins
+- Rolling driver stats: season-to-date points, wins, podiums, average finish
+- Rolling constructor stats: season-to-date points, wins
 - Season context: `year`, `round`
 
 During inference, the same signals are prepared for the upcoming race to power the win-probability and finishing-position models.

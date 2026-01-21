@@ -15,7 +15,7 @@ def parse_args() -> argparse.Namespace:
         description="Train the F1 predictor and generate predictions for a specific season/round."
     )
     parser.add_argument("--season", type=int, default=2025, help="Season to build inputs for (default: 2025).")
-    parser.add_argument("--round", type=int, default=20, help="Round to build inputs for (default: 20).")
+    parser.add_argument("--round", type=int, default=24, help="Round to build inputs for (default: 24).")
     return parser.parse_args()
 
 

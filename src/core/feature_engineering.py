@@ -130,21 +130,47 @@ class FeatureEngineer:
         df["finish_position"] = df["positionOrder"].astype(float)
         df["target"] = (df["finish_position"] == 1).astype(int)
 
-        df["prev_points"] = df.groupby("driverId")["points"].transform(lambda s: s.cumsum() - s)
+        driver_group = df.groupby(["driverId", "year"], sort=False)
+        df["prev_points"] = driver_group["points"].cumsum() - df["points"]
+
         win_flag = (df["positionOrder"] == 1).astype(int)
-        df["prev_wins"] = win_flag.groupby(df["driverId"]).cumsum() - win_flag
+        df["prev_wins"] = win_flag.groupby([df["driverId"], df["year"]]).cumsum() - win_flag
 
         podium_flag = (df["positionOrder"] <= 3).astype(int)
-        df["driver_prev_podiums"] = podium_flag.groupby(df["driverId"]).cumsum() - podium_flag
+        df["driver_prev_podiums"] = podium_flag.groupby([df["driverId"], df["year"]]).cumsum() - podium_flag
 
-        driver_finish_cumsum = df.groupby("driverId")["finish_position"].cumsum() - df["finish_position"]
-        driver_counts = df.groupby("driverId").cumcount()
+        driver_finish_cumsum = driver_group["finish_position"].cumsum() - df["finish_position"]
+        driver_counts = driver_group.cumcount()
         df["driver_prev_avg_finish"] = driver_finish_cumsum / driver_counts.replace(0, np.nan)
         df.loc[driver_counts == 0, "driver_prev_avg_finish"] = df.loc[driver_counts == 0, "grid"]
         df["driver_prev_avg_finish"] = df["driver_prev_avg_finish"].fillna(df["grid"])
 
-        df["constructor_prev_points"] = df.groupby("constructorId")["points"].cumsum() - df["points"]
-        df["constructor_prev_wins"] = win_flag.groupby(df["constructorId"]).cumsum() - win_flag
+        constructor_points = (
+            df.groupby(["constructorId", "year", "round"], sort=False)["points"]
+            .sum()
+            .rename("constructor_points")
+        )
+        constructor_wins = (
+            win_flag.groupby([df["constructorId"], df["year"], df["round"]])
+            .sum()
+            .rename("constructor_wins")
+        )
+        constructor_race = pd.concat([constructor_points, constructor_wins], axis=1).reset_index()
+        constructor_race.sort_values(by=["constructorId", "year", "round"], inplace=True)
+        constructor_group = constructor_race.groupby(["constructorId", "year"], sort=False)
+        constructor_race["constructor_prev_points"] = (
+            constructor_group["constructor_points"].cumsum() - constructor_race["constructor_points"]
+        )
+        constructor_race["constructor_prev_wins"] = (
+            constructor_group["constructor_wins"].cumsum() - constructor_race["constructor_wins"]
+        )
+        df = df.merge(
+            constructor_race[
+                ["constructorId", "year", "round", "constructor_prev_points", "constructor_prev_wins"]
+            ],
+            on=["constructorId", "year", "round"],
+            how="left",
+        )
 
         df["year"] = df["year"].astype(int)
         df["round"] = df["round"].astype(int)
