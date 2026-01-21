@@ -1,41 +1,50 @@
 import argparse
+import logging
 from pathlib import Path
 
-from src.core.feature_engineering import FeatureEngineer
-from src.core.jolpica import JolpicaClient
-from src.core.predictor import F1GrandPrixPredictor
+from src.core.app import PipelineConfig, PredictorPipeline
+from src.core.models import RaceIdentifier
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
-RESULTS_DIR = DATA_DIR / "results"
+PROJECT_ROOT = Path(__file__).resolve().parent
+DEFAULT_SEASON = 2025
+DEFAULT_ROUND = 25
+
+LOGGER = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Train the F1 predictor and generate predictions for a specific season/round."
     )
-    parser.add_argument("--season", type=int, default=2025, help="Season to build inputs for (default: 2025).")
-    parser.add_argument("--round", type=int, default=24, help="Round to build inputs for (default: 24).")
+    parser.add_argument(
+        "--season",
+        type=int,
+        default=DEFAULT_SEASON,
+        help=f"Season to build inputs for (default: {DEFAULT_SEASON}).",
+    )
+    parser.add_argument(
+        "--round",
+        type=int,
+        default=DEFAULT_ROUND,
+        help=f"Round to build inputs for (default: {DEFAULT_ROUND}).",
+    )
     return parser.parse_args()
 
 
+def configure_logging() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+
 def main() -> None:
+    configure_logging()
     args = parse_args()
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-
-    predictor = F1GrandPrixPredictor(JolpicaClient(), FeatureEngineer())
-    predictor.download_kaggle_data()
-    predictor.load_data()
-    predictor.preprocess()
-    predictor.verify_jolpica_availability(args.season, args.round)
-    predictor.train()
-
-    race_inputs_path = RESULTS_DIR / "race_inputs.csv"
-    predictor.build_inputs_csv_via_jolpica(season=args.season, rnd=args.round, output_csv=str(race_inputs_path))
-
-    prediction_path = RESULTS_DIR / "prediction_results.csv"
-    results = predictor.predict_from_csv(str(race_inputs_path), output_path=str(prediction_path))
-    print(results.head())
+    LOGGER.info("Running F1 predictor pipeline for season %s round %s", args.season, args.round)
+    config = PipelineConfig.from_project_root(
+        RaceIdentifier(season=args.season, round=args.round),
+        PROJECT_ROOT,
+    )
+    predictor = PredictorPipeline.with_default_predictor(config)
+    predictor.run()
 
 
 if __name__ == "__main__":

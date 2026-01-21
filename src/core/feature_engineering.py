@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Sequence, Tuple
+import logging
+from typing import Sequence
 
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder, StandardScaler
+
+from .abstract.interfaces import FeatureEngineerBase
+from .models import KaggleDataSources, TrainingData
 
 DEFAULT_FEATURE_COLUMNS = [
     "driver_encoded",
@@ -21,6 +24,8 @@ DEFAULT_FEATURE_COLUMNS = [
     "year",
     "round",
 ]
+
+LOGGER = logging.getLogger(__name__)
 
 PREDICTION_INPUT_COLUMNS = {
     "driverRef",
@@ -38,16 +43,7 @@ PREDICTION_INPUT_COLUMNS = {
 }
 
 
-@dataclass
-class TrainingData:
-    frame: pd.DataFrame
-    X_scaled: np.ndarray
-    y_win: np.ndarray
-    y_position: np.ndarray
-    race_names: np.ndarray
-
-
-class FeatureEngineer:
+class FeatureEngineer(FeatureEngineerBase):
     """Handle feature engineering, encoding, and scaling for race prediction."""
 
     def __init__(self, feature_columns: Sequence[str] | None = None) -> None:
@@ -57,15 +53,8 @@ class FeatureEngineer:
         self.circuit_encoder = LabelEncoder()
         self.scaler = StandardScaler()
 
-    def build_training_data(
-        self,
-        results: pd.DataFrame,
-        races: pd.DataFrame,
-        drivers: pd.DataFrame,
-        constructors: pd.DataFrame,
-        circuits: pd.DataFrame,
-    ) -> TrainingData:
-        df = self._merge_sources(results, races, drivers, constructors, circuits)
+    def build_training_data(self, sources: KaggleDataSources) -> TrainingData:
+        df = self._merge_sources(sources)
         df = self._engineer_features(df)
         df = self._encode_categoricals(df)
         df = self._finalize_numeric(df)
@@ -87,7 +76,7 @@ class FeatureEngineer:
             race_names=race_names,
         )
 
-    def transform_prediction_inputs(self, frame: pd.DataFrame) -> Tuple[pd.DataFrame, np.ndarray]:
+    def transform_prediction_inputs(self, frame: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:
         encoded = frame.copy()
         encoded["driver_encoded"] = self._encode_with_new(self.driver_encoder, encoded["driverRef"], "driver")
         encoded["constructor_encoded"] = self._encode_with_new(
@@ -109,18 +98,11 @@ class FeatureEngineer:
         X_scaled = self.scaler.transform(X)
         return encoded, X_scaled
 
-    def _merge_sources(
-        self,
-        results: pd.DataFrame,
-        races: pd.DataFrame,
-        drivers: pd.DataFrame,
-        constructors: pd.DataFrame,
-        circuits: pd.DataFrame,
-    ) -> pd.DataFrame:
-        df = results.merge(races, on="raceId", suffixes=("", "_race"))
-        df = df.merge(drivers, on="driverId")
-        df = df.merge(constructors, on="constructorId")
-        df = df.merge(circuits, on="circuitId")
+    def _merge_sources(self, sources: KaggleDataSources) -> pd.DataFrame:
+        df = sources.results.merge(sources.races, on="raceId", suffixes=("", "_race"))
+        df = df.merge(sources.drivers, on="driverId")
+        df = df.merge(sources.constructors, on="constructorId")
+        df = df.merge(sources.circuits, on="circuitId")
         if "raceName" not in df.columns and "name" in df.columns:
             df["raceName"] = df["name"]
         return df
@@ -208,5 +190,5 @@ class FeatureEngineer:
         if missing_mask.any():
             new_classes = np.unique(values[missing_mask])
             encoder.classes_ = np.unique(np.concatenate([encoder.classes_, new_classes]))
-            print(f"[warn] Added new {kind} labels: {', '.join(new_classes)}")
+            LOGGER.warning("Added new %s labels: %s", kind, ", ".join(new_classes))
         return encoder.transform(values)

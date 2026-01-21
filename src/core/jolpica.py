@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from typing import Dict, Optional
@@ -7,6 +8,9 @@ from typing import Dict, Optional
 import numpy as np
 import pandas as pd
 import requests
+
+from .abstract.interfaces import RaceDataClient
+from .models import JolpicaNextRaceRequest, JolpicaRoundRequest, RaceIdentifier
 
 ROUND_OUTPUT_COLUMNS = [
     "season",
@@ -38,6 +42,8 @@ NUMERIC_FEATURE_COLUMNS = [
     "constructor_prev_wins",
 ]
 
+LOGGER = logging.getLogger(__name__)
+
 
 @dataclass
 class RaceCalendarEntry:
@@ -48,18 +54,18 @@ class RaceCalendarEntry:
     date: pd.Timestamp
 
 
-class JolpicaClient:
+class JolpicaClient(RaceDataClient):
     def __init__(self, base_url: str = "https://api.jolpi.ca/ergast/f1"):
         self.base_url = base_url.rstrip("/")
 
     def _request(
-            self,
-            path: str,
-            params: Optional[Dict[str, str]] = None,
-            *,
-            limit: int = 1000,
-            retries: int = 3,
-            timeout: int = 30,
+        self,
+        path: str,
+        params: Optional[Dict[str, str]] = None,
+        *,
+        limit: int = 1000,
+        retries: int = 3,
+        timeout: int = 30,
     ) -> dict:
         url = f"{self.base_url}/{path.lstrip('/')}"
         query = dict(params or {})
@@ -134,60 +140,47 @@ class JolpicaClient:
             )
         return pd.DataFrame(rows), circuit, race_name
 
-    def build_inputs_for_round(
-            self,
-            season: int,
-            rnd: int,
-            kaggle_drivers: pd.DataFrame,
-            kaggle_constructors: pd.DataFrame,
-            kaggle_races: pd.DataFrame,
-            kaggle_circuits: Optional[pd.DataFrame] = None,
-    ) -> pd.DataFrame:
-        season_results = self.fetch_season_results(season)
+    def build_inputs_for_round(self, request: JolpicaRoundRequest) -> pd.DataFrame:
+        race = request.race
+        sources = request.sources
+        season_results = self.fetch_season_results(race.season)
         if season_results.empty:
-            raise RuntimeError(f"No race results available for season {season}.")
+            raise RuntimeError(f"No race results available for season {race.season}.")
 
-        entries = self._extract_round_entries(season_results, season, rnd)
-        stats = self._compute_historical_stats(season_results, rnd)
-        enriched = self._attach_stats(entries, stats, season, rnd, kaggle_races, kaggle_drivers)
-        return self._attach_identifiers(enriched, kaggle_drivers, kaggle_constructors, kaggle_circuits)
+        entries = self._extract_round_entries(season_results, race)
+        stats = self._compute_historical_stats(season_results, race)
+        enriched = self._attach_stats(entries, stats, race)
+        return self._attach_identifiers(
+            enriched,
+            sources.drivers,
+            sources.constructors,
+            sources.circuits,
+        )
 
-    def get_next_race_candidates(
-            self,
-            season: int,
-            kaggle_drivers: Optional[pd.DataFrame] = None,
-            kaggle_constructors: Optional[pd.DataFrame] = None,
-            kaggle_races: Optional[pd.DataFrame] = None,
-            kaggle_circuits: Optional[pd.DataFrame] = None,
-    ) -> pd.DataFrame:
+    def get_next_race_candidates(self, request: JolpicaNextRaceRequest) -> pd.DataFrame:
+        season = request.season
+        sources = request.sources
         calendar = self._fetch_calendar(season)
         next_race = self._determine_next_race(calendar)
 
-        drivers_df = self._require("drivers", kaggle_drivers)
-        constructors_df = self._require("constructors", kaggle_constructors)
-        races_df = self._require("races", kaggle_races)
-
         try:
             return self.build_inputs_for_round(
-                season,
-                next_race.round,
-                kaggle_drivers=drivers_df,
-                kaggle_constructors=constructors_df,
-                kaggle_races=races_df,
-                kaggle_circuits=kaggle_circuits,
+                JolpicaRoundRequest(
+                    race=RaceIdentifier(season=season, round=next_race.round),
+                    sources=sources,
+                )
             )
         except RuntimeError:
-            print(
+            LOGGER.info(
                 "[jolpica] Falling back to historical participant list because Jolpica "
                 "does not yet expose the upcoming round."
             )
             return self._approximate_candidates_from_history(
                 season,
                 next_race,
-                drivers_df,
-                constructors_df,
-                races_df,
-                kaggle_circuits,
+                sources.drivers,
+                sources.constructors,
+                sources.circuits,
             )
 
     def _fetch_calendar(self, season: int) -> pd.DataFrame:
@@ -225,9 +218,9 @@ class JolpicaClient:
             date=race_row["date"],
         )
 
-    def _extract_round_entries(self, season_results: pd.DataFrame, season: int, rnd: int) -> pd.DataFrame:
+    def _extract_round_entries(self, season_results: pd.DataFrame, race: RaceIdentifier) -> pd.DataFrame:
         round_entries = (
-            season_results[season_results["round"] == rnd][
+            season_results[season_results["round"] == race.round][
                 ["driverRef", "constructorRef", "circuitRef", "grid", "season", "round", "raceName"]
             ]
             .drop_duplicates(subset=["driverRef", "constructorRef"])
@@ -236,16 +229,16 @@ class JolpicaClient:
         if not round_entries.empty:
             return round_entries
 
-        qualifying_df, circuit_ref, race_name = self.fetch_round_qualifying_entries(season, rnd)
+        qualifying_df, circuit_ref, race_name = self.fetch_round_qualifying_entries(race.season, race.round)
         if qualifying_df.empty:
-            raise RuntimeError(f"Could not find entries for season {season} round {rnd}.")
+            raise RuntimeError(f"Could not find entries for season {race.season} round {race.round}.")
 
         qualifying_df["circuitRef"] = circuit_ref
         qualifying_df["raceName"] = race_name or ""
         return qualifying_df
 
-    def _compute_historical_stats(self, season_results: pd.DataFrame, rnd: int) -> Dict[str, pd.Series]:
-        history = season_results[season_results["round"] < rnd].copy()
+    def _compute_historical_stats(self, season_results: pd.DataFrame, race: RaceIdentifier) -> Dict[str, pd.Series]:
+        history = season_results[season_results["round"] < race.round].copy()
         if history.empty:
             empty_series = pd.Series(dtype=float)
             return {
@@ -278,23 +271,21 @@ class JolpicaClient:
         }
 
     def _attach_stats(
-            self,
-            entries: pd.DataFrame,
-            stats: Dict[str, pd.Series],
-            season: int,
-            rnd: int,
-            kaggle_races: Optional[pd.DataFrame],
-            kaggle_drivers: Optional[pd.DataFrame],
+        self,
+        entries: pd.DataFrame,
+        stats: Dict[str, pd.Series],
+        race: RaceIdentifier,
     ) -> pd.DataFrame:
         enriched = entries.copy()
         enriched["prev_points"] = enriched["driverRef"].map(stats["driver_points"]).fillna(0.0)
         enriched["prev_wins"] = enriched["driverRef"].map(stats["driver_wins"]).fillna(0)
         enriched["driver_prev_podiums"] = enriched["driverRef"].map(stats["driver_podiums"]).fillna(0)
         enriched["driver_prev_avg_finish"] = enriched["driverRef"].map(stats["driver_avg_finish"]).fillna(
-            enriched["grid"])
+            enriched["grid"]
+        )
         enriched["constructor_prev_points"] = enriched["constructorRef"].map(stats["constructor_points"]).fillna(0.0)
         enriched["constructor_prev_wins"] = enriched["constructorRef"].map(stats["constructor_wins"]).fillna(0)
-        enriched["year"] = season
+        enriched["year"] = race.season
         enriched["round"] = enriched["round"].astype(int)
 
         for col in NUMERIC_FEATURE_COLUMNS:
@@ -304,11 +295,11 @@ class JolpicaClient:
         return enriched
 
     def _attach_identifiers(
-            self,
-            entries: pd.DataFrame,
-            kaggle_drivers: pd.DataFrame,
-            kaggle_constructors: pd.DataFrame,
-            kaggle_circuits: Optional[pd.DataFrame],
+        self,
+        entries: pd.DataFrame,
+        kaggle_drivers: pd.DataFrame,
+        kaggle_constructors: pd.DataFrame,
+        kaggle_circuits: Optional[pd.DataFrame],
     ) -> pd.DataFrame:
         result = entries.copy()
         driver_map = dict(
@@ -340,21 +331,23 @@ class JolpicaClient:
         else:
             result["circuitId"] = None
 
-        print(
-            f"[jolpica] Prepared {len(result)} entries for season {result['season'].iloc[0]} "
-            f"round {result['round'].iloc[0]} ({result['raceName'].iloc[0]}) "
-            f"with {result['constructorRef'].nunique()} constructors."
+        LOGGER.info(
+            "[jolpica] Prepared %s entries for season %s round %s (%s) with %s constructors.",
+            len(result),
+            result["season"].iloc[0],
+            result["round"].iloc[0],
+            result["raceName"].iloc[0],
+            result["constructorRef"].nunique(),
         )
         return result[ROUND_OUTPUT_COLUMNS].copy()
 
     def _approximate_candidates_from_history(
-            self,
-            season: int,
-            next_race: RaceCalendarEntry,
-            kaggle_drivers: pd.DataFrame,
-            kaggle_constructors: pd.DataFrame,
-            kaggle_races: pd.DataFrame,
-            kaggle_circuits: Optional[pd.DataFrame],
+        self,
+        season: int,
+        next_race: RaceCalendarEntry,
+        kaggle_drivers: pd.DataFrame,
+        kaggle_constructors: pd.DataFrame,
+        kaggle_circuits: Optional[pd.DataFrame],
     ) -> pd.DataFrame:
         season_results = self.fetch_season_results(season)
         history = season_results[season_results["round"] < next_race.round]
@@ -363,7 +356,10 @@ class JolpicaClient:
 
         last_round = history["round"].max()
         last_entries = history[history["round"] == last_round][["driverRef", "constructorRef"]].drop_duplicates()
-        stats = self._compute_historical_stats(season_results, next_race.round)
+        stats = self._compute_historical_stats(
+            season_results,
+            RaceIdentifier(season=season, round=next_race.round),
+        )
 
         approx = last_entries.copy()
         approx["season"] = season
@@ -376,18 +372,9 @@ class JolpicaClient:
         approx = self._attach_stats(
             approx,
             stats,
-            season=season,
-            rnd=next_race.round,
-            kaggle_races=kaggle_races,
-            kaggle_drivers=kaggle_drivers,
+            race=RaceIdentifier(season=season, round=next_race.round),
         )
         return self._attach_identifiers(approx, kaggle_drivers, kaggle_constructors, kaggle_circuits)
-
-    @staticmethod
-    def _require(name: str, value: Optional[pd.DataFrame]) -> pd.DataFrame:
-        if value is None:
-            raise RuntimeError(f"Kaggle {name} DataFrame is required for this operation.")
-        return value
 
 
 def _to_naive_timestamp(value: pd.Timestamp | pd.NaT) -> pd.Timestamp:

@@ -4,80 +4,12 @@ import argparse
 from pathlib import Path
 from typing import Iterable
 
-import pandas as pd
-
-DEFAULT_RESULTS_PATH = Path(__file__).resolve().parents[1] / "data" / "results" / "prediction_results.csv"
-
-REQUIRED_COLUMNS = {
-    "season",
-    "round",
-    "raceName",
-    "driverRef",
-    "predicted_position",
-    "predicted_rank",
-    "predicted_top5",
-    "win_probability",
-}
-
-DEFAULT_DISPLAY_COLUMNS = [
-    "driverRef",
-    "predicted_rank",
-    "win_probability",
-    "constructorRef",
-]
-
-
-def load_predictions(csv_path: str | Path) -> pd.DataFrame:
-    path = Path(csv_path)
-    if not path.exists():
-        raise FileNotFoundError(f"Prediction CSV '{csv_path}' not found.")
-    df = pd.read_csv(path)
-    missing = REQUIRED_COLUMNS.difference(df.columns)
-    if missing:
-        raise ValueError(
-            f"CSV '{csv_path}' is missing required columns: {sorted(missing)}. "
-            "Generate it with the latest predictor before running the reporter."
-        )
-    return df
-
-
-def summarize_predictions(
-    frame: pd.DataFrame,
-    *,
-    top_n: int = 5,
-) -> str:
-    df = frame.copy()
-
-    races: list[str] = []
-    show_cols = DEFAULT_DISPLAY_COLUMNS
-
-    group_keys = ["season", "round", "raceName"]
-    for (season, rnd, name), group in df.groupby(group_keys, sort=True):
-        subset = group.nsmallest(top_n, "predicted_rank").sort_values("predicted_rank")
-        available_cols = [col for col in show_cols if col in subset.columns]
-        if not available_cols:
-            continue
-        formatted_subset = subset[available_cols].copy()
-        if "predicted_position" in formatted_subset.columns:
-            formatted_subset["predicted_position"] = formatted_subset["predicted_position"].round(2)
-        header = f"{season} Round {rnd}: {name}"
-        races.append(_format_table(header, formatted_subset))
-
-    if not races:
-        return "No prediction rows available."
-
-    summary_lines = [
-        f"Total races summarised: {df['raceName'].nunique()}",
-        f"Unique drivers: {df['driverRef'].nunique()}",
-        "",
-    ]
-    summary_lines.extend(races)
-    return "\n".join(summary_lines)
-
-
-def _format_table(title: str, table: pd.DataFrame) -> str:
-    formatted = table.to_string(index=False)
-    return f"{title}\n{formatted}\n"
+from src.core.reporting import (
+    DEFAULT_RESULTS_PATH,
+    DEFAULT_TOP_N,
+    PredictionReporter,
+    ReportConfig,
+)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -89,7 +21,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=str(DEFAULT_RESULTS_PATH),
         help=f"Path to prediction CSV (default: {DEFAULT_RESULTS_PATH}).",
     )
-    parser.add_argument("--top", type=int, default=5, help="How many rows per race to display (default: 5).")
+    parser.add_argument(
+        "--top",
+        type=int,
+        default=DEFAULT_TOP_N,
+        help=f"How many rows per race to display (default: {DEFAULT_TOP_N}).",
+    )
     return parser
 
 
@@ -98,17 +35,20 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        frame = load_predictions(args.file)
+        reporter = PredictionReporter(
+            ReportConfig(
+                csv_path=Path(args.file),
+                top_n=args.top,
+            )
+        )
+        summary = reporter.run()
     except Exception as exc:  # noqa: BLE001
-        print(f"Failed to load predictions: {exc}")
+        print(f"Failed to build prediction report: {exc}")
         return 1
 
-    summary = summarize_predictions(
-        frame,
-        top_n=args.top,
-    )
     print(summary)
     return 0
+
 
 if __name__ == "__main__":
     main()
