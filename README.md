@@ -43,11 +43,3 @@ Example output:
 | russell   | 3              | 6.63               | 0.01630         | 2    | mercedes       |
 | piastri   | 4              | 7.34               | 0.01435         | 4    | mclaren        |
 | sainz     | 5              | 7.65               | 0.01044         | 5    | ferrari        |
-
-## Lint
-
-```bash
-poetry run ruff check
-```
-
-Runs Ruff for the project’s lint rules (configured in `pyproject.toml`).
